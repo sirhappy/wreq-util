@@ -63,6 +63,20 @@ macro_rules! tls_options {
             .grease_sigalgs_enabled(true)
             .alps_use_new_codepoint(true))
     };
+    // Chrome 156 (measured 2026-11-11 against GPM's Chromium 156.0.8078.48): 9 plus BoringSSL's
+    // `server_padding` extension (0x12e0) asking for 0 bytes.
+    (10, $curves:expr, $trust_anchors:expr) => {
+        tls_options!(@build ChromeTlsConfig::builder()
+            .permute_extensions(true)
+            .enable_ech_grease(true)
+            .pre_shared_key(true)
+            .curves($curves)
+            .sigalgs_list(NEW_SIGALGS_LIST)
+            .trust_anchors($trust_anchors)
+            .grease_sigalgs_enabled(true)
+            .server_padding_request(0)
+            .alps_use_new_codepoint(true))
+    };
 }
 
 pub const CURVES_1: &str = join!(":", "X25519", "P-256", "P-384");
@@ -203,6 +217,9 @@ pub struct ChromeTlsConfig {
 
     #[builder(default, setter(strip_option))]
     grease_sigalgs_enabled: Option<bool>,
+
+    #[builder(default, setter(strip_option))]
+    server_padding_request: Option<u16>,
 }
 
 impl From<ChromeTlsConfig> for TlsOptions {
@@ -230,6 +247,9 @@ impl From<ChromeTlsConfig> for TlsOptions {
         if let Some(enabled) = val.grease_sigalgs_enabled {
             opts.grease_sigalgs_enabled = Some(enabled);
         }
+        if let Some(bytes) = val.server_padding_request {
+            opts.server_padding_request = Some(bytes);
+        }
         opts
     }
 }
@@ -247,6 +267,7 @@ mod tests {
             crate::Profile::Chrome152,
             crate::Profile::Chrome153,
             crate::Profile::Chrome154,
+            crate::Profile::Chrome156,
         ] {
             let native = profile.into_emulation();
             let cloned = native.clone();
@@ -258,7 +279,7 @@ mod tests {
                 let decoded = decode_ids(&ids);
                 let mut expected = chromium_roots::trust_anchor_ids();
                 expected.sort_unstable();
-                if profile == crate::Profile::Chrome154 {
+                if matches!(profile, crate::Profile::Chrome154 | crate::Profile::Chrome156) {
                     assert_eq!(decoded, expected);
                 }
                 let mut actual = decoded;
@@ -302,5 +323,17 @@ mod tests {
             remaining = rest;
         }
         decoded
+    }
+}
+
+#[cfg(test)]
+mod server_padding_tests {
+    use wreq::IntoEmulation;
+
+    #[test]
+    fn only_chrome_156_requests_server_padding() {
+        let of = |p: crate::Profile| p.into_emulation().tls_options.unwrap().server_padding_request;
+        assert_eq!(of(crate::Profile::Chrome156), Some(0));
+        assert_eq!(of(crate::Profile::Chrome154), None);
     }
 }
